@@ -8,6 +8,8 @@ import scrum_graph
 from bson import ObjectId
 import pymongo
 from dotenv import load_dotenv
+from werkzeug.utils import secure_filename
+
 load_dotenv()  # Load environment variables from .env file
 app = Flask(__name__)
 CORS(app, supports_credentials=True)
@@ -201,7 +203,7 @@ def analyze_spec(current_user):
 
         team_members = data.get('teamMembers') or []
         sprint_duration = data.get('sprintDuration') or data.get('sprint_length_days') or 2
-
+        skip_analysis = data.get('skipAnalysis', False)
         # Build team object expected by scrum_graph
         team = {
             'sprint_length_days': int(sprint_duration),
@@ -213,7 +215,7 @@ def analyze_spec(current_user):
                 } for m in team_members
             ]
         }
-
+        print(skip_analysis)
         # Run the planning graph. Prefer build_scrum_graph (safe), fall back to run_scrum_planning if present.
         if hasattr(scrum_graph, 'build_scrum_graph'):
             graph = scrum_graph.build_scrum_graph()
@@ -222,6 +224,7 @@ def analyze_spec(current_user):
                 'team': team,
                 'validation_attempts': 0,
                 'max_validation_attempts': 1,
+                'spec_validation_step':  not skip_analysis
             })
         elif hasattr(scrum_graph, 'run_scrum_planning'):
             result = scrum_graph.run_scrum_planning(cahier, team)
@@ -289,6 +292,36 @@ def apply_fixes(current_user):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/transcript_file", methods=["POST"])
+@token_required
+def transcript_file(current_user):
+    try:
+        if "file" not in request.files:
+            return jsonify({"error": "Missing file field (expected 'file')"}), 400
+
+        f = request.files["file"]
+        if not f or not f.filename:
+            return jsonify({"error": "Empty file"}), 400
+
+        filename = secure_filename(f.filename)
+        file_bytes = f.read()
+
+        if not file_bytes:
+            return jsonify({"error": "Uploaded file is empty"}), 400
+
+        content = scrum_graph.extract_document_with_images(file_bytes, filename)
+
+        return jsonify({
+            "success": True,
+            "filename": filename,
+            "content": content
+        }), 200
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+ 
 
 if __name__ == '__main__':
     app.run(debug=True, port=int(os.environ.get('PORT', 5000)))

@@ -68,11 +68,12 @@ const Index = () => {
   const [results, setResults] = useState<ScrumResult | null>(null);
   const [enhancedSpec, setEnhancedSpec] = useState<string | null>(null);
   const [newSkill, setNewSkill] = useState<Record<string, string>>({});
-
+  const [skipAnalysis, setSkipAnalysis] = useState(false);
   const isStep1Valid = documentContent.trim().length >= 50;
   const validMembers = teamMembers.filter(
     (m) => m.name.trim() && m.skills.length > 0,
   );
+  console.log(skipAnalysis);
   const isStep2Valid =
     validMembers.length >= 3 &&
     teamMembers.length >= 3 &&
@@ -149,6 +150,7 @@ const Index = () => {
         documentContent,
         teamMembers: validMembers,
         sprintDuration,
+        skipAnalysis,
       };
       const res = await authFetch("/api/scrum/analyze", {
         method: "POST",
@@ -167,13 +169,14 @@ const Index = () => {
       setStep(3);
     }
   };
-  const handleReanalyze = async () => {
+  const handleReanalyze = async (skip: boolean = false) => {
     setStep("loading");
     try {
       const payload = {
         documentContent: enhancedSpec,
         teamMembers: validMembers,
         sprintDuration,
+        skipAnalysis: skip,
       };
 
       const res = await authFetch("/api/scrum/analyze", {
@@ -381,6 +384,21 @@ const Index = () => {
                     rows={8}
                     className="bg-muted/50 border-border resize-none font-mono text-sm"
                   />
+                  <div className="flex items-center gap-2">
+                    <input
+                      id="skipAnalysis"
+                      type="checkbox"
+                      checked={skipAnalysis}
+                      onChange={(e) => setSkipAnalysis(e.target.checked)}
+                      className="w-4 h-4"
+                    />
+                    <label
+                      htmlFor="skipAnalysis"
+                      className="text-sm text-muted-foreground"
+                    >
+                      Ignorer l'analyse
+                    </label>
+                  </div>
                   {documentContent.length > 0 &&
                     documentContent.length < 50 && (
                       <p className="text-xs text-destructive">

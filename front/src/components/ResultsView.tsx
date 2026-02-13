@@ -18,7 +18,6 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { authFetch } from "@/services/scrumAPI";
 import { supabase } from "@/integrations/supabase/client";
 import type { ScrumResult } from "@/types/scrum";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -38,7 +37,7 @@ interface Props {
   ) => void | Promise<void>;
   oldDocument: string;
   enhancedSpec?: string | null;
-  reanalyze: () => void | Promise<void>;
+  reanalyze: (skip?: boolean) => void | Promise<void>;
 }
 
 const ResultsView = ({
@@ -64,6 +63,8 @@ const ResultsView = ({
   const [selectedFixes, setSelectedFixes] = useState<Record<string, boolean>>(
     {},
   );
+  const [skipAnalysis, setSkipAnalysis] = useState(false);
+
   const handleGithubConnect = async () => {
     try {
       const res = await fetch(
@@ -150,6 +151,7 @@ const ResultsView = ({
   const toggleFix = (id: string) => {
     setSelectedFixes((prev) => ({ ...prev, [id]: !prev[id] }));
   };
+
   const selectedList = (() => {
     if (!results?.spec_fix_suggestions?.suggestions) return [] as any[];
     const list: any[] = [];
@@ -157,322 +159,371 @@ const ResultsView = ({
       (s: any, sIndex: number) => {
         s.fixes?.forEach((f: any) => {
           const key = `${sIndex}-${f.id}`;
-          if (selectedFixes[key])
+          if (selectedFixes[key]) {
             list.push({ ...f, parentMessage: s.message, _key: key });
+          }
         });
       },
     );
     return list;
   })();
+
   console.log("Selected Fixes:", selectedList);
-  return results?.spec_validation?.ok ? (
-    <div className="min-h-screen glow-bg">
-      <header className="border-b border-border/50 px-6 py-4 sticky top-0 bg-background/80 backdrop-blur-md z-10">
-        <div className="container mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Button variant="ghost" size="icon" onClick={onBack}>
-              <ArrowLeft className="w-5 h-5" />
-            </Button>
-            <h1 className="text-xl font-bold gradient-text">ScrumAgent</h1>
-          </div>
-          <div className="flex items-center gap-4">
-            <div className="flex gap-4 text-sm text-muted-foreground">
-              <span className="flex items-center gap-1">
-                <LayoutList className="w-4 h-4" />{" "}
-                {results.estimated_backlog.length} US
-              </span>
-              <span className="flex items-center gap-1">
-                <CalendarDays className="w-4 h-4" />{" "}
-                {results.sprint_backlogs.length} Sprints
-              </span>
-              <span className="flex items-center gap-1">
-                <CheckCircle2 className="w-4 h-4" />{" "}
-                {results.product_backlog[0].stories.length} Tâches
-              </span>
+
+  if (results?.spec_validation?.ok || results?.spec_validation_step === false) {
+    return (
+      <div className="min-h-screen glow-bg">
+        <header className="border-b border-border/50 px-6 py-4 sticky top-0 bg-background/80 backdrop-blur-md z-10">
+          <div className="container mx-auto flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Button variant="ghost" size="icon" onClick={onBack}>
+                <ArrowLeft className="w-5 h-5" />
+              </Button>
+              <h1 className="text-xl font-bold gradient-text">ScrumAgent</h1>
             </div>
-            <ThemeToggle />
+            <div className="flex items-center gap-4">
+              <div className="flex gap-4 text-sm text-muted-foreground">
+                <span className="flex items-center gap-1">
+                  <LayoutList className="w-4 h-4" />{" "}
+                  {results.estimated_backlog?.length || 0} US
+                </span>
+                <span className="flex items-center gap-1">
+                  <CalendarDays className="w-4 h-4" />{" "}
+                  {results.sprint_backlogs?.length || 0} Sprints
+                </span>
+                <span className="flex items-center gap-1">
+                  <CheckCircle2 className="w-4 h-4" />{" "}
+                  {results.product_backlog?.[0]?.stories?.length || 0} Tâches
+                </span>
+              </div>
+              <ThemeToggle />
+            </div>
           </div>
-        </div>
-      </header>
+        </header>
 
-      <main className="container mx-auto px-6 py-8 max-w-5xl">
-        {/* GitHub Integration Panel */}
-        <div className="mb-6">
-          {!showGithubPanel && !boardResult && (
-            <Button
-              onClick={() => setShowGithubPanel(true)}
-              className="w-full sm:w-auto gap-2 bg-[hsl(0,0%,13%)] hover:bg-[hsl(0,0%,20%)] text-white dark:bg-[hsl(0,0%,90%)] dark:text-[hsl(0,0%,13%)] dark:hover:bg-[hsl(0,0%,80%)]"
-              size="lg"
-            >
-              <Github className="w-5 h-5" />
-              Créer un GitHub Project Board
-            </Button>
-          )}
+        <main className="container mx-auto px-6 py-8 max-w-5xl">
+          {/* GitHub Integration Panel */}
+          <div className="mb-6">
+            {!showGithubPanel && !boardResult && (
+              <Button
+                onClick={() => setShowGithubPanel(true)}
+                className="w-full sm:w-auto gap-2 bg-[hsl(0,0%,13%)] hover:bg-[hsl(0,0%,20%)] text-white dark:bg-[hsl(0,0%,90%)] dark:text-[hsl(0,0%,13%)] dark:hover:bg-[hsl(0,0%,80%)]"
+                size="lg"
+              >
+                <Github className="w-5 h-5" />
+                Créer un GitHub Project Board
+              </Button>
+            )}
 
-          {showGithubPanel && !boardResult && (
-            <motion.div
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="rounded-xl border border-border bg-card p-6 space-y-4"
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <Github className="w-6 h-6" />
-                  <div>
-                    <h3 className="font-semibold">GitHub Project Board</h3>
-                    <p className="text-sm text-muted-foreground">
-                      Créez automatiquement un repo, des issues et un Project V2
-                    </p>
-                  </div>
-                </div>
-                {githubUser && (
-                  <Badge variant="secondary" className="gap-1">
-                    <CheckCircle2 className="w-3 h-3" />
-                    {githubUser}
-                  </Badge>
-                )}
-              </div>
-
-              {!githubToken ? (
-                <Button
-                  onClick={handleGithubConnect}
-                  variant="outline"
-                  className="gap-2"
-                >
-                  <Github className="w-4 h-4" />
-                  Se connecter à GitHub
-                </Button>
-              ) : (
-                <div className="space-y-3">
-                  <div className="space-y-1.5">
-                    <label className="text-sm font-medium">
-                      Nom du repository
-                    </label>
-                    <Input
-                      value={repoName}
-                      onChange={(e) => setRepoName(e.target.value)}
-                      placeholder="mon-projet-scrum"
-                      className="max-w-sm bg-muted/50"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Un nouveau repo sera créé sous github.com/{githubUser}/
-                      {repoName}
-                    </p>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button
-                      onClick={handleCreateBoard}
-                      disabled={isCreatingBoard || !repoName.trim()}
-                      className="gap-2"
-                    >
-                      {isCreatingBoard ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          Création en cours...
-                        </>
-                      ) : (
-                        <>
-                          <Github className="w-4 h-4" />
-                          Créer le board
-                        </>
-                      )}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      onClick={() => setShowGithubPanel(false)}
-                    >
-                      Annuler
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </motion.div>
-          )}
-
-          {boardResult && (
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="rounded-xl border border-success/30 bg-success/5 p-6 space-y-3"
-            >
-              <div className="flex items-center gap-2 text-success">
-                <CheckCircle2 className="w-5 h-5" />
-                <h3 className="font-semibold">
-                  GitHub Board créé avec succès !
-                </h3>
-              </div>
-              <div className="flex flex-wrap gap-3">
-                <a
-                  href={boardResult.repoUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  <Button variant="outline" size="sm" className="gap-2">
-                    <Github className="w-4 h-4" />
-                    Voir le Repository
-                    <ExternalLink className="w-3 h-3" />
-                  </Button>
-                </a>
-                <a
-                  href={boardResult.projectUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  <Button variant="outline" size="sm" className="gap-2">
-                    <LayoutList className="w-4 h-4" />
-                    Voir le Project Board
-                    <ExternalLink className="w-3 h-3" />
-                  </Button>
-                </a>
-              </div>
-            </motion.div>
-          )}
-        </div>
-
-        <Tabs defaultValue="sprints">
-          <TabsList className="mb-6 bg-muted/50">
-            <TabsTrigger value="backlog">Product Backlog</TabsTrigger>
-            <TabsTrigger value="sprints">Sprints</TabsTrigger>
-          </TabsList>
-
-          {/* Backlog */}
-          <TabsContent value="backlog">
-            <div className="space-y-3">
-              {results.product_backlog[0].stories.map((story, i) => (
-                <motion.div
-                  key={story.id}
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: i * 0.05 }}
-                  className="rounded-lg border border-border bg-card p-4 flex items-start gap-4"
-                >
-                  <div className="flex flex-col items-center gap-1 pt-1">
-                    <span className="text-xs font-mono text-muted-foreground">
-                      {story.id}
-                    </span>
-                  </div>
-                  <div className="flex-1 space-y-2">
-                    <div className="flex items-start justify-between gap-2">
-                      <h4 className="font-semibold">{story.title}</h4>
+            {showGithubPanel && !boardResult && (
+              <motion.div
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="rounded-xl border border-border bg-card p-6 space-y-4"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Github className="w-6 h-6" />
+                    <div>
+                      <h3 className="font-semibold">GitHub Project Board</h3>
+                      <p className="text-sm text-muted-foreground">
+                        Créez automatiquement un repo, des issues et un Project
+                        V2
+                      </p>
                     </div>
-                    <p className="text-sm text-muted-foreground">
-                      {story.description}
-                    </p>
-                    {story.acceptance_criteria.length > 0 && (
-                      <div className="space-y-1">
-                        <p className="text-xs font-semibold text-muted-foreground">
-                          Critères d'acceptation
-                        </p>
-                        {story.acceptance_criteria.map((c, j) => (
-                          <p
-                            key={j}
-                            className="text-xs text-muted-foreground flex items-start gap-1.5"
-                          >
-                            <CheckCircle2 className="w-3 h-3 mt-0.5 text-success shrink-0" />
-                            {c}
-                          </p>
-                        ))}
-                      </div>
-                    )}
                   </div>
-                </motion.div>
-              ))}
-            </div>
-          </TabsContent>
+                  {githubUser && (
+                    <Badge variant="secondary" className="gap-1">
+                      <CheckCircle2 className="w-3 h-3" />
+                      {githubUser}
+                    </Badge>
+                  )}
+                </div>
 
-          {/* Sprints */}
-          <TabsContent value="sprints">
-            <div className="space-y-4">
-              {results.sprint_backlogs.map((sprint, i) => (
-                <motion.div
-                  key={sprint.sprint}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: i * 0.08 }}
-                  className="rounded-xl border border-border bg-card overflow-hidden"
-                >
-                  <button
-                    className="w-full flex items-center justify-between p-5 hover:bg-muted/30 transition-colors text-left"
-                    onClick={() =>
-                      setExpandedSprint(expandedSprint === i ? null : i)
-                    }
+                {!githubToken ? (
+                  <Button
+                    onClick={handleGithubConnect}
+                    variant="outline"
+                    className="gap-2"
                   >
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center font-bold text-primary">
-                        {sprint.sprint}
-                      </div>
-                      <div>
-                        <h4 className="font-semibold">
-                          Sprint {sprint.sprint}
-                        </h4>
-                        <p className="text-sm text-muted-foreground">
-                          {sprint.goal}
-                        </p>
-                      </div>
+                    <Github className="w-4 h-4" />
+                    Se connecter à GitHub
+                  </Button>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="space-y-1.5">
+                      <label className="text-sm font-medium">
+                        Nom du repository
+                      </label>
+                      <Input
+                        value={repoName}
+                        onChange={(e) => setRepoName(e.target.value)}
+                        placeholder="mon-projet-scrum"
+                        className="max-w-sm bg-muted/50"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Un nouveau repo sera créé sous github.com/{githubUser}/
+                        {repoName}
+                      </p>
                     </div>
-                    <div className="flex items-center gap-3">
-                      <Badge variant="secondary" className="text-xs">
-                        {sprint.items.length} tâches
-                      </Badge>
-                      {expandedSprint === i ? (
-                        <ChevronDown className="w-5 h-5 text-muted-foreground" />
-                      ) : (
-                        <ChevronRight className="w-5 h-5 text-muted-foreground" />
-                      )}
+                    <div className="flex gap-2">
+                      <Button
+                        onClick={handleCreateBoard}
+                        disabled={isCreatingBoard || !repoName.trim()}
+                        className="gap-2"
+                      >
+                        {isCreatingBoard ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            Création en cours...
+                          </>
+                        ) : (
+                          <>
+                            <Github className="w-4 h-4" />
+                            Créer le board
+                          </>
+                        )}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        onClick={() => setShowGithubPanel(false)}
+                      >
+                        Annuler
+                      </Button>
                     </div>
-                  </button>
+                  </div>
+                )}
+              </motion.div>
+            )}
 
-                  {expandedSprint === i && (
+            {boardResult && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="rounded-xl border border-success/30 bg-success/5 p-6 space-y-3"
+              >
+                <div className="flex items-center gap-2 text-success">
+                  <CheckCircle2 className="w-5 h-5" />
+                  <h3 className="font-semibold">
+                    GitHub Board créé avec succès !
+                  </h3>
+                </div>
+                <div className="flex flex-wrap gap-3">
+                  <a
+                    href={boardResult.repoUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <Button variant="outline" size="sm" className="gap-2">
+                      <Github className="w-4 h-4" />
+                      Voir le Repository
+                      <ExternalLink className="w-3 h-3" />
+                    </Button>
+                  </a>
+                  <a
+                    href={boardResult.projectUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <Button variant="outline" size="sm" className="gap-2">
+                      <LayoutList className="w-4 h-4" />
+                      Voir le Project Board
+                      <ExternalLink className="w-3 h-3" />
+                    </Button>
+                  </a>
+                </div>
+              </motion.div>
+            )}
+          </div>
+
+          <Tabs defaultValue="sprints">
+            <TabsList className="mb-6 bg-muted/50">
+              <TabsTrigger value="backlog">Product Backlog</TabsTrigger>
+              <TabsTrigger value="sprints">Sprints</TabsTrigger>
+            </TabsList>
+
+            {/* Backlog */}
+            <TabsContent value="backlog">
+              <div className="space-y-3">
+                {results.product_backlog?.[0]?.stories?.map((story, i) => {
+                  const est = results.estimated_backlog?.find(
+                    (e: any) => e.id === story.id,
+                  );
+                  return (
                     <motion.div
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: "auto" }}
-                      className="border-t border-border"
+                      key={story.id}
+                      initial={{ opacity: 0, x: -20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: i * 0.05 }}
+                      className="rounded-lg border border-border bg-card p-4 flex items-start gap-4"
                     >
-                      <div className="p-4 space-y-2">
-                        <p className="text-xs font-semibold text-muted-foreground mb-3">
-                          User Stories:
-                        </p>
-                        {sprint.items.map((storyId) => {
-                          const task = results.product_backlog[0].stories.find(
-                            (s) => s.id === storyId,
-                          );
-                          if (!task) return null;
-
-                          return (
-                            <div
-                              key={task.id}
-                              className="flex items-center gap-3 p-3 rounded-lg bg-muted/30 border border-border/50"
-                            >
-                              <span className="text-xs font-mono text-muted-foreground w-12 shrink-0">
-                                {task.id}
+                      <div className="flex flex-col items-center gap-1 pt-1">
+                        <span className="text-xs font-mono text-muted-foreground">
+                          {story.id}
+                        </span>
+                      </div>
+                      <div className="flex-1 space-y-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-3">
+                            {est?.time_estimation && (
+                              <span className="text-xs text-muted-foreground">
+                                {est.time_estimation}
                               </span>
-
-                              <div className="flex-1 min-w-0">
-                                <p className="text-sm font-medium truncate">
-                                  {task.title}
-                                </p>
-                                <p className="text-xs text-muted-foreground truncate">
-                                  {task.as_a} — {task.i_want}
-                                </p>
-                              </div>
-
-                              <Badge variant="secondary" className="text-xs">
-                                {task.required_skills?.length} skills
+                            )}
+                            {est?.priority && (
+                              <Badge
+                                variant="secondary"
+                                className="text-xs uppercase"
+                              >
+                                {est.points} pts - {est.risk}
                               </Badge>
-                            </div>
-                          );
-                        })}
+                            )}
+                            <h4 className="font-semibold">{story.title}</h4>
+                          </div>
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                          {story.description}
+                        </p>
+                        {story.acceptance_criteria?.length > 0 && (
+                          <div className="space-y-1">
+                            <p className="text-xs font-semibold text-muted-foreground">
+                              Critères d'acceptation
+                            </p>
+                            {story.acceptance_criteria.map((c, j) => (
+                              <p
+                                key={j}
+                                className="text-xs text-muted-foreground flex items-start gap-1.5"
+                              >
+                                <CheckCircle2 className="w-3 h-3 mt-0.5 text-success shrink-0" />
+                                {c}
+                              </p>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </motion.div>
-                  )}
-                </motion.div>
-              ))}
-            </div>
-          </TabsContent>
-        </Tabs>
-      </main>
-    </div>
-  ) : (
+                  );
+                })}
+              </div>
+            </TabsContent>
+
+            {/* Sprints */}
+            <TabsContent value="sprints">
+              <div className="space-y-4">
+                {results.sprint_backlogs?.map((sprint, i) => (
+                  <motion.div
+                    key={sprint.sprint}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: i * 0.08 }}
+                    className="rounded-xl border border-border bg-card overflow-hidden"
+                  >
+                    <button
+                      className="w-full flex items-center justify-between p-5 hover:bg-muted/30 transition-colors text-left"
+                      onClick={() =>
+                        setExpandedSprint(expandedSprint === i ? null : i)
+                      }
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center font-bold text-primary">
+                          {sprint.sprint}
+                        </div>
+                        <div>
+                          <h4 className="font-semibold">
+                            Sprint {sprint.sprint}
+                          </h4>
+                          <p className="text-sm text-muted-foreground">
+                            {sprint.goal}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <Badge variant="secondary" className="text-xs">
+                          {sprint.items?.length || 0} tâches
+                        </Badge>
+                        {expandedSprint === i ? (
+                          <ChevronDown className="w-5 h-5 text-muted-foreground" />
+                        ) : (
+                          <ChevronRight className="w-5 h-5 text-muted-foreground" />
+                        )}
+                      </div>
+                    </button>
+
+                    {expandedSprint === i && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: "auto" }}
+                        className="border-t border-border"
+                      >
+                        <div className="p-4 space-y-2">
+                          <p className="text-xs font-semibold text-muted-foreground mb-3">
+                            User Stories:
+                          </p>
+                          {sprint.items?.map((storyId) => {
+                            const task =
+                              results.product_backlog?.[0]?.stories?.find(
+                                (s) => s.id === storyId,
+                              );
+                            const est = results.estimated_backlog?.find(
+                              (e: any) => e.id === storyId,
+                            );
+                            if (!task) return null;
+
+                            return (
+                              <div
+                                key={task.id}
+                                className="flex items-center gap-3 p-3 rounded-lg bg-muted/30 border border-border/50"
+                              >
+                                <span className="text-xs font-mono text-muted-foreground w-12 shrink-0">
+                                  {task.id}
+                                </span>
+
+                                <div className="flex-1 min-w-0">
+                                  <div className="text-sm font-medium truncate flex items-center gap-2">
+                                    {est?.time_estimation && (
+                                      <span className="text-xs text-muted-foreground">
+                                        {est.time_estimation}
+                                      </span>
+                                    )}
+                                    {est?.risk && (
+                                      <Badge
+                                        variant="secondary"
+                                        className="text-xs uppercase"
+                                      >
+                                        {est.risk}
+                                      </Badge>
+                                    )}
+                                    <span className="truncate">
+                                      {task.title}
+                                    </span>
+                                  </div>
+                                  <p className="text-xs text-muted-foreground truncate">
+                                    {task.as_a} - {task.i_want}
+                                  </p>
+                                </div>
+
+                                <Badge variant="secondary" className="text-xs">
+                                  {task.required_skills
+                                    ?.map((skill) => skill)
+                                    .join(", ")}
+                                </Badge>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </motion.div>
+                    )}
+                  </motion.div>
+                ))}
+              </div>
+            </TabsContent>
+          </Tabs>
+        </main>
+      </div>
+    );
+  }
+
+  return (
     <main className="container mx-auto px-6 py-8 max-w-5xl">
       <div className="rounded-xl border border-border bg-card p-6">
         <h3 className="font-semibold mb-2">
@@ -500,7 +551,7 @@ const ResultsView = ({
                 </ul>
               </div>
             )}
-            {results.spec_fix_suggestions.suggestions.map(
+            {results.spec_fix_suggestions.suggestions?.map(
               (s: any, i: number) => (
                 <div
                   key={i}
@@ -581,14 +632,31 @@ const ResultsView = ({
                 {enhancedSpec}
               </pre>
               <div className="flex-shrink-0">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={isReanalyzing}
-                  onClick={reanalyze}
-                >
-                  Réanalyser avec la spec améliorée
-                </Button>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <input
+                      id="rv-skip-analysis"
+                      type="checkbox"
+                      checked={skipAnalysis}
+                      onChange={(e) => setSkipAnalysis(e.target.checked)}
+                      className="w-4 h-4"
+                    />
+                    <label
+                      htmlFor="rv-skip-analysis"
+                      className="text-sm text-muted-foreground"
+                    >
+                      Ignorer l'analyse
+                    </label>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={isReanalyzing}
+                    onClick={() => reanalyze(skipAnalysis)}
+                  >
+                    Réanalyser avec la spec améliorée
+                  </Button>
+                </div>
               </div>
             </div>
           </div>

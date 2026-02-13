@@ -44,7 +44,7 @@ const Login = () => {
         title: "Succès",
         description: "Connecté avec succès.",
       });
-      navigate("/", { replace: true });
+      navigate("/dashboard", { replace: true });
     } catch (err: any) {
       setLoading(false);
       toast({
@@ -78,6 +78,7 @@ const Login = () => {
               : JSON.stringify(res.error),
           variant: "destructive",
         });
+        navigate("/");
         return;
       }
 
