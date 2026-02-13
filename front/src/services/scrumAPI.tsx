@@ -93,10 +93,34 @@ export async function authFetch(path: string, options: RequestInit = {}) {
   return data;
 }
 
+export async function transcriptFile(fileBytes: Uint8Array, filename: string) {
+  const token = getToken();
+
+  const form = new FormData();
+  const blob = new Blob([fileBytes.buffer.slice(fileBytes.byteOffset, fileBytes.byteOffset + fileBytes.byteLength)], { type: "application/octet-stream" });
+
+  form.append("file", blob, filename);
+
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const res = await fetch(`${API_BASE}/api/transcript_file`, {
+    method: "POST",
+    headers, // IMPORTANT: do NOT set Content-Type here
+    body: form,
+    credentials: "include",
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw data;
+  return data;
+}
+ 
 export default {
   login,
   register,
   me,
+  transcriptFile,
   authFetch,
   setToken,
   getToken,

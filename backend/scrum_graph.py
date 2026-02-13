@@ -925,7 +925,7 @@ def build_scrum_graph():
         route_after_validation,
         {
             "done": END,
-            "refine": "estimate_backlog",
+            "refine": "refine_backlog",
             "replan": "sprint_planner",
             "stop": END
         }

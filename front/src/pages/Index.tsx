@@ -24,6 +24,7 @@ import type { TeamMember, ScrumResult } from "@/types/scrum";
 import ResultsView from "@/components/ResultsView";
 import ThemeToggle from "@/components/ThemeToggle";
 import ScrumRules from "@/components/ScrumRules";
+import { transcriptFile } from "@/services/scrumAPI";
 import DocumentRequirements from "@/components/DocumentRequirements";
 import { spec } from "node:test/reporters";
 
@@ -82,12 +83,26 @@ const Index = () => {
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setFileName(file.name);
-    const text = await file.text();
-    setDocumentContent(text);
-    toast({ title: "Fichier chargé", description: file.name });
-  };
 
+    try {
+      setFileName(file.name);
+
+      const buffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+
+      const res = await transcriptFile(bytes, file.name);
+
+      setDocumentContent(res.content || "");
+      toast({ title: "Fichier chargé", description: file.name });
+    } catch (err: any) {
+      console.error(err);
+      toast({
+        title: "Erreur",
+        description: err?.error || "Impossible de lire le fichier",
+        variant: "destructive",
+      });
+    }
+  };
   const addMember = () => {
     if (teamMembers.length >= 9) {
       toast({
@@ -169,6 +184,7 @@ const Index = () => {
       setStep(3);
     }
   };
+
   const handleReanalyze = async (skip: boolean = false) => {
     setStep("loading");
     try {
@@ -363,7 +379,7 @@ const Index = () => {
                     </span>
                     <input
                       type="file"
-                      accept=".txt,.md,.text"
+                      accept=".docx,.pdf,.text,.txt"
                       onChange={handleFileUpload}
                       className="hidden"
                     />
