@@ -1,0 +1,7 @@
+project_id = "vmrzhcupcgugonayyrin"
+
+[functions.github-auth]
+verify_jwt = false
+
+[functions.github-create-board]
+verify_jwt = false
