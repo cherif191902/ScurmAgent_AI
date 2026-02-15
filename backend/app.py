@@ -8,17 +8,17 @@ import scrum_graph
 from bson import ObjectId
 import pymongo
 from dotenv import load_dotenv
-load_dotenv()  # Load environment variables from .env file
+load_dotenv()
+
 app = Flask(__name__)
 CORS(app, supports_credentials=True)
 
 # Configuration
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'man7ebbech')
 
-# MongoDB setup (use MONGODB_URI env var for Atlas)
+# MongoDB setup
 MONGO_URI = os.getenv("MONGODB_URI") or os.getenv("MONGO_URI") or "mongodb://localhost:27017"
 client = pymongo.MongoClient(MONGO_URI)
-# Prefer explicit MONGO_DB env; otherwise use DB embedded in the URI; fallback to 'scrum_db'
 env_db = os.getenv('MONGO_DB')
 if env_db:
     db = client[env_db]
@@ -34,11 +34,10 @@ if users_col.count_documents({}) == 0:
         'id': demo_id,
         'username': 'testuser',
         'email': 'test@example.com',
-        'password': 'test123',  # demo only
+        'password': 'test123',
         'created_at': datetime.utcnow().isoformat(),
     })
 
-# Feature flag from scrum_graph (if present)
 HAS_SCRUM_AGENT = getattr(scrum_graph, 'HAS_SCRUM_AGENT', True)
 
 
@@ -47,7 +46,6 @@ def token_required(f):
     def decorated(*args, **kwargs):
         token = None
 
-        # Check if token is in headers
         if 'Authorization' in request.headers:
             auth_header = request.headers['Authorization']
             if auth_header.startswith('Bearer '):
@@ -66,7 +64,6 @@ def token_required(f):
             if not current_user:
                 return jsonify({'error': 'User not found!'}), 401
 
-            # normalize id field
             current_user['id'] = current_user.get('id') or str(current_user.get('_id'))
         except jwt.ExpiredSignatureError:
             return jsonify({'error': 'Token has expired!'}), 401
@@ -80,11 +77,9 @@ def token_required(f):
 
 @app.route('/api/auth/register', methods=['POST'])
 def register():
-    """Register new user"""
     try:
         data = request.get_json()
 
-        # Check required fields
         if not data:
             return jsonify({"error": "No data provided"}), 400
 
@@ -93,13 +88,11 @@ def register():
             if field not in data:
                 return jsonify({"error": f"Missing field: {field}"}), 400
 
-        # Check if user exists
         if users_col.find_one({'email': data['email']}) is not None:
             return jsonify({"error": "Email already registered"}), 400
         if users_col.find_one({'username': data['username']}) is not None:
             return jsonify({"error": "Username already taken"}), 400
 
-        # Create new user (in production, hash the password!)
         new_id = str(ObjectId())
         user_doc = {
             'id': new_id,
@@ -126,23 +119,19 @@ def register():
 
 @app.route('/api/auth/login', methods=['POST'])
 def login():
-    """Login user and return token"""
     try:
         data = request.get_json()
 
         if not data or 'email' not in data or 'password' not in data:
             return jsonify({"error": "Missing email or password"}), 400
 
-        # Find user
         user = users_col.find_one({'email': data['email']})
         if not user:
             return jsonify({"error": "User not found"}), 404
 
-        # Check password (in production, use proper password hashing!)
         if user.get('password') != data['password']:
             return jsonify({"error": "Invalid password"}), 401
 
-        # Generate JWT token
         token = jwt.encode({
             'user_id': user.get('id') or str(user.get('_id')),
             'username': user.get('username'),
@@ -167,7 +156,6 @@ def login():
 @app.route('/api/auth/me', methods=['GET'])
 @token_required
 def get_current_user(current_user):
-    """Get current user info (protected route)"""
     return jsonify({
         "success": True,
         "user": {
@@ -181,7 +169,6 @@ def get_current_user(current_user):
 @app.route('/api/auth/logout', methods=['POST'])
 @token_required
 def logout(current_user):
-    """Logout user (in production, implement token blacklist)"""
     return jsonify({
         "success": True,
         "message": "Logged out successfully"
@@ -191,7 +178,6 @@ def logout(current_user):
 @app.route('/api/scrum/analyze', methods=['POST'])
 @token_required
 def analyze_spec(current_user):
-    """Analyze a cahier de charge and return scrum planning result"""
     try:
         data = request.get_json() or {}
 
@@ -199,22 +185,30 @@ def analyze_spec(current_user):
         if not cahier:
             return jsonify({"error": "Missing documentContent / cahier_de_charge"}), 400
 
-        team_members = data.get('teamMembers') or []
+        # Extraire le titre du projet
+        titre_projet = scrum_graph.extract_project_title(cahier)
+        print("Titre du projet:", titre_projet)
+
+        # ✅ Lire les variables GitHub EN PREMIER (avant la construction du team)
+        github_token = os.getenv("GITHUB_TOKEN")
+        github_username = os.getenv("GITHUB_USERNAME") or ""
+
+        team_members_raw = data.get('teamMembers') or []
         sprint_duration = data.get('sprintDuration') or data.get('sprint_length_days') or 2
 
-        # Build team object expected by scrum_graph
+        # ✅ name du membre = son username GitHub directement
         team = {
             'sprint_length_days': int(sprint_duration),
             'sprint_capacity_points': data.get('sprintCapacityPoints', 20),
             'members': [
                 {
                     'name': m.get('name') or m.get('display_name') or 'Member',
-                    'skills': m.get('skills') or []
-                } for m in team_members
+                    'skills': m.get('skills') or [],
+                    'github_login': m.get('name') or m.get('display_name') or github_username
+                } for m in team_members_raw
             ]
         }
 
-        # Run the planning graph. Prefer build_scrum_graph (safe), fall back to run_scrum_planning if present.
         if hasattr(scrum_graph, 'build_scrum_graph'):
             graph = scrum_graph.build_scrum_graph()
             result = graph.invoke({
@@ -223,18 +217,39 @@ def analyze_spec(current_user):
                 'validation_attempts': 0,
                 'max_validation_attempts': 1,
             })
-        elif hasattr(scrum_graph, 'run_scrum_planning'):
-            result = scrum_graph.run_scrum_planning(cahier, team)
         else:
             return jsonify({"error": "scrum_graph does not expose a planner function"}), 500
 
-        return jsonify({"success": True, "plan": result}), 200
+        # ── GitHub integration ──────────────────────────────────
+        github_result = None
+
+        if github_token and github_username:
+            try:
+                github_result = scrum_graph.create_github_scrum_board(
+                    token=github_token,
+                    username=github_username,
+                    project_title=titre_projet,
+                    sprint_backlogs=result.get("sprint_backlogs", []),
+                    estimated_backlog=result.get("estimated_backlog", []),
+                    assignments=result.get("assignments", []),
+                    team_members=team.get("members", [])
+                )
+                print("GitHub board créé :", github_result["board_url"])
+            except Exception as gh_err:
+                print("Erreur GitHub (non bloquant):", gh_err)
+                github_result = {"ok": False, "error": str(gh_err)}
+
+        return jsonify({
+            "success": True,
+            "project_title": titre_projet,
+            "plan": result,
+            "github": github_result
+        }), 200
 
     except Exception as e:
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
 
 
 if __name__ == '__main__':

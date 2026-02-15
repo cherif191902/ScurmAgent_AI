@@ -15,7 +15,7 @@ from langchain_groq import ChatGroq
 from langgraph.prebuilt import ToolNode
 
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage,ToolMessage
-
+import re
 import json
 import ast
 from typing import Any
@@ -24,6 +24,7 @@ from typing import Any
 from typing import TypedDict, List, Dict, Any, Optional
 from dataclasses import dataclass
 import math
+import re
 
 from langgraph.graph import StateGraph, END
 
@@ -743,9 +744,309 @@ merge_graph.add_edge("merge_spec", END)
 
 merge_app = merge_graph.compile()
 
-if __name__ == "__main__":
-    graph = build_scrum_graph()
 
+def extract_project_title(cahier: str) -> str:
+    """
+    Extrait le titre du projet depuis un cahier de charges.
+    Cherche une ligne contenant 'projet' ou 'Nom du projet'.
+    Retourne la ligne nettoyée.
+    """
+    lines = cahier.split("\n")
+    for line in lines:
+        line_clean = line.strip().replace("\u200b", "")  # supprime les caractères invisibles
+        # Cherche "projet" ou "nom du projet" (case insensitive)
+        if re.search(r"\bprojet\b", line_clean, re.IGNORECASE):
+            return line_clean
+    return "Titre du projet non trouvé"
+
+import requests
+
+def create_github_scrum_board(
+    token: str,
+    username: str,
+    project_title: str,
+    sprint_backlogs: list,
+    estimated_backlog: list,
+    assignments: list = [],
+     team_members: list = []
+) -> dict:
+    """
+    Crée automatiquement :
+    - Un repo GitHub nommé d'après le titre du projet
+    - Un Project Board Scrum avec les user stories assignées et colorées par sprint
+    """
+
+    headers_rest = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}"
+    }
+    headers_graphql = {"Authorization": f"Bearer {token}"}
+
+    # Nettoyer le nom du repo
+    repo_name = project_title.strip().lower()
+    repo_name = re.sub(r'[^a-z0-9\-]', '-', repo_name)
+    repo_name = re.sub(r'-+', '-', repo_name).strip('-')
+
+    # ── 1. Créer ou récupérer le repo ──────────────────────────
+    repo_check = requests.get(
+        f"https://api.github.com/repos/{username}/{repo_name}",
+        headers=headers_rest
+    )
+
+    if repo_check.status_code == 200:
+        repo_info = repo_check.json()
+        print(f"Repo '{repo_name}' existe déjà : {repo_info['html_url']}")
+    else:
+        repo_resp = requests.post(
+            "https://api.github.com/user/repos",
+            json={
+                "name": repo_name,
+                "description": f"Scrum planning pour : {project_title}",
+                "private": False
+            },
+            headers=headers_rest
+        )
+        if repo_resp.status_code != 201:
+            raise Exception(f"Erreur création repo : {repo_resp.json()}")
+        repo_info = repo_resp.json()
+        print(f"Repo créé : {repo_info['html_url']}")
+
+    repo_name_clean = repo_info["name"]
+    repo_url = repo_info["html_url"]
+
+    # ── 2. Créer les labels colorés par sprint ──────────────────
+    # Couleurs distinctes pour chaque sprint
+    sprint_colors = [
+        "0075ca",  # Sprint 1 - bleu
+        "e4e669",  # Sprint 2 - jaune
+        "d93f0b",  # Sprint 3 - rouge
+        "0e8a16",  # Sprint 4 - vert
+        "5319e7",  # Sprint 5 - violet
+        "f9d0c4",  # Sprint 6 - rose
+        "1d76db",  # Sprint 7 - bleu clair
+        "b60205",  # Sprint 8 - rouge foncé
+    ]
+
+    sprint_label_map = {}  # sprint_num → label name
+
+    for sprint in sprint_backlogs:
+        sprint_num = sprint["sprint"]
+        color = sprint_colors[(sprint_num - 1) % len(sprint_colors)]
+        label_name = f"Sprint {sprint_num}"
+
+        # Créer le label (ignorer si déjà existant)
+        label_resp = requests.post(
+            f"https://api.github.com/repos/{username}/{repo_name_clean}/labels",
+            json={
+                "name": label_name,
+                "color": color,
+                "description": f"Issues du Sprint {sprint_num}"
+            },
+            headers=headers_rest
+        )
+
+        if label_resp.status_code in [201, 422]:  # 422 = déjà existant
+            sprint_label_map[sprint_num] = label_name
+            print(f"🏷️  Label '{label_name}' (#{color}) prêt")
+        else:
+            print(f"⚠️ Erreur label Sprint {sprint_num}: {label_resp.json()}")
+
+    # ── 3. Récupérer les usernames GitHub des membres ───────────
+    # Construire mapping : nom membre → github username
+    # On essaie de résoudre via l'API GitHub search
+    members_github = {}  # nom → github_login
+
+    all_member_names = set()
+    for assignment in assignments:
+        assigned_to = assignment.get("assigned_to")
+        if assigned_to:
+            all_member_names.add(assigned_to)
+
+    for member_name in all_member_names:
+        # Chercher le user GitHub par son nom
+        search_resp = requests.get(
+            f"https://api.github.com/search/users?q={member_name}+in:login",
+            headers=headers_rest
+        )
+        if search_resp.status_code == 200:
+            items = search_resp.json().get("items", [])
+            if items:
+                members_github[member_name] = items[0]["login"]
+                print(f"👤 Membre trouvé : {member_name} → @{items[0]['login']}")
+            else:
+                # fallback : utiliser le username du token
+                members_github[member_name] = username
+                print(f"⚠️ Membre '{member_name}' non trouvé sur GitHub → assigné à @{username}")
+        else:
+            members_github[member_name] = username
+
+    # ── 4. Construire les mappings ───────────────────────────────
+    stories_map = {s["id"]: s for s in estimated_backlog}
+    assignments_map = {a["story_id"]: a for a in assignments}  # story_id → assignment
+
+    # ── 5. Récupérer owner ID et créer le board ─────────────────
+    owner_resp = requests.post(
+        "https://api.github.com/graphql",
+        json={"query": f'{{ user(login:"{username}") {{ id }} }}'},
+        headers=headers_graphql
+    ).json()
+    owner_id = owner_resp["data"]["user"]["id"]
+
+    project_resp = requests.post(
+        "https://api.github.com/graphql",
+        json={
+            "query": f"""
+            mutation {{
+              createProjectV2(input: {{
+                ownerId: "{owner_id}",
+                title: "{project_title}"
+              }}) {{
+                projectV2 {{ id url }}
+              }}
+            }}
+            """
+        },
+        headers=headers_graphql
+    ).json()
+
+    if project_resp.get("errors"):
+        latest = requests.post(
+            "https://api.github.com/graphql",
+            json={
+                "query": f"""
+                {{
+                  user(login: "{username}") {{
+                    projectsV2(first:5, orderBy: {{field:CREATED_AT, direction:DESC}}) {{
+                      nodes {{ id title url }}
+                    }}
+                  }}
+                }}
+                """
+            },
+            headers=headers_graphql
+        ).json()["data"]["user"]["projectsV2"]["nodes"][0]
+        project_id = latest["id"]
+        project_url = latest["url"]
+        print(f"Board existant utilisé : {project_url}")
+    else:
+        project_id = project_resp["data"]["createProjectV2"]["projectV2"]["id"]
+        project_url = project_resp["data"]["createProjectV2"]["projectV2"]["url"]
+        print(f"Board créé : {project_url}")
+
+    # ── 6. Créer les issues avec assignees + labels ──────────────
+    created_issues = []
+    errors_issues = []
+
+    for sprint in sprint_backlogs:
+        sprint_num = sprint["sprint"]
+        print(f"\n📋 Sprint {sprint_num} — {len(sprint['items'])} stories")
+
+        for story_id in sprint["items"]:
+            story = stories_map.get(story_id)
+            assignment = assignments_map.get(story_id)
+
+            if story:
+                title = story.get("title", story_id)
+                points = story.get("points", "?")
+                risk = story.get("risk", "")
+                complexity = story.get("complexity", "")
+            else:
+                print(f"⚠️ Story {story_id} non trouvée")
+                title = story_id
+                points = "?"
+                risk = "unknown"
+                complexity = "unknown"
+
+            # Récupérer l'assignee GitHub
+            assigned_to_name = assignment.get("assigned_to") if assignment else None
+            github_login = members_github.get(assigned_to_name, username) if assigned_to_name else username
+            assignees = [github_login]
+
+            issue_title = f"[Sprint {sprint_num}] {title}"
+            issue_body = (
+                f"## 📌 {title}\n\n"
+                f"| Champ | Valeur |\n"
+                f"|-------|--------|\n"
+                f"| **Story ID** | {story_id} |\n"
+                f"| **Sprint** | {sprint_num} |\n"
+                f"| **Story Points** | {points} |\n"
+                f"| **Risk** | {risk} |\n"
+                f"| **Complexity** | {complexity} |\n"
+                f"| **Assigné à** | @{github_login} |\n"
+            )
+
+            # Créer l'issue REST avec assignee + label
+            issue_resp = requests.post(
+                f"https://api.github.com/repos/{username}/{repo_name_clean}/issues",
+                json={
+                    "title": issue_title,
+                    "body": issue_body,
+                    "assignees": assignees,
+                    "labels": [sprint_label_map.get(sprint_num, f"Sprint {sprint_num}")]
+                },
+                headers=headers_rest
+            )
+
+            if issue_resp.status_code != 201:
+                print(f"❌ Erreur issue '{issue_title}': {issue_resp.status_code} → {issue_resp.json()}")
+                errors_issues.append({
+                    "story_id": story_id,
+                    "error": issue_resp.json()
+                })
+                continue
+
+            issue_data = issue_resp.json()
+            issue_node_id = issue_data["node_id"]
+            issue_url = issue_data["html_url"]
+
+            # Ajouter au Project Board
+            add_resp = requests.post(
+                "https://api.github.com/graphql",
+                json={
+                    "query": f"""
+                    mutation {{
+                      addProjectV2ItemById(input:{{
+                        projectId:"{project_id}",
+                        contentId:"{issue_node_id}"
+                      }}) {{
+                        item {{ id }}
+                      }}
+                    }}
+                    """
+                },
+                headers=headers_graphql
+            ).json()
+
+            if add_resp.get("errors"):
+                print(f"❌ Erreur ajout board '{issue_title}': {add_resp['errors']}")
+                errors_issues.append({
+                    "story_id": story_id,
+                    "error": str(add_resp["errors"])
+                })
+            else:
+                created_issues.append({
+                    "story_id": story_id,
+                    "sprint": sprint_num,
+                    "title": issue_title,
+                    "url": issue_url,
+                    "assignee": github_login
+                })
+                print(f"✅ {story_id} → @{github_login} | {issue_url}")
+
+    print(f"\n📊 Résumé final : {len(created_issues)} créées, {len(errors_issues)} erreurs")
+
+    return {
+        "ok": True,
+        "repo_url": repo_url,
+        "board_url": project_url,
+        "issues_created": len(created_issues),
+        "issues": created_issues,
+        "errors": errors_issues
+    }
+
+if __name__ == "__main__":
+    
+    graph = build_scrum_graph()
     cahier_de_charge = """
 Cahier des Charges — Équipe Joy
 Projet SummerCamp 2025
@@ -800,7 +1101,7 @@ Les limites de projet doivent être définies pour garantir que la plateforme Po
 10. **Équipe projet**
 L’équipe sera définie plus tard.
 """
-
+   
 
     team = {
         "sprint_length_days": 14,
